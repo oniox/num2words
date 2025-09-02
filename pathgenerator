@@ -1,0 +1,81 @@
+import com.rosetta.model.lib.RosettaModelObject;
+import com.rosetta.model.lib.RosettaModelObjectBuilder;
+import java.lang.reflect.Method;
+import java.util.Map;
+
+/**
+ * A utility class for populating CDM objects using dot-notated JSON path representations.
+ * This utility assumes single cardinality fields for simplicity. For list fields, enhance with index support (e.g., field[0].subfield).
+ * Values are assumed to be of the correct type for the setter method.
+ */
+public class CdmPathPopulator {
+
+    /**
+     * Populates a CDM object builder with values from a map where keys are dot-notated paths.
+     *
+     * @param rootClass The class of the root CDM object.
+     * @param pathToValue A map of paths to values.
+     * @param <T> The type of the CDM object.
+     * @return The populated CDM object.
+     */
+    public <T extends RosettaModelObject> T populate(Class<T> rootClass, Map<String, Object> pathToValue) {
+        T.Builder builder = getBuilder(rootClass);
+        for (Map.Entry<String, Object> entry : pathToValue.entrySet()) {
+            String path = entry.getKey();
+            Object value = entry.getValue();
+            setByPath(builder, path.split("\\."), 0, value);
+        }
+        return builder.build();
+    }
+
+    private <T extends RosettaModelObject> T.Builder getBuilder(Class<T> rootClass) {
+        try {
+            Method builderMethod = rootClass.getMethod("builder");
+            return (T.Builder) builderMethod.invoke(null);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get builder for " + rootClass.getName(), e);
+        }
+    }
+
+    private void setByPath(RosettaModelObjectBuilder builder, String[] pathSegments, int index, Object value) {
+        if (index == pathSegments.length - 1) {
+            setLeafValue(builder, pathSegments[index], value);
+        } else {
+            RosettaModelObjectBuilder nestedBuilder = getOrCreateNestedBuilder(builder, pathSegments[index]);
+            setByPath(nestedBuilder, pathSegments, index + 1, value);
+        }
+    }
+
+    private void setLeafValue(RosettaModelObjectBuilder builder, String fieldName, Object value) {
+        String setMethodName = "set" + capitalize(fieldName);
+        try {
+            Method setMethod = builder.getClass().getMethod(setMethodName, value.getClass());
+            setMethod.invoke(builder, value);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to set value for " + fieldName, e);
+        }
+    }
+
+    private RosettaModelObjectBuilder getOrCreateNestedBuilder(RosettaModelObjectBuilder builder, String fieldName) {
+        String getOrCreateMethodName = "getOrCreate" + capitalize(fieldName);
+        try {
+            Method getOrCreateMethod = builder.getClass().getMethod(getOrCreateMethodName);
+            return (RosettaModelObjectBuilder) getOrCreateMethod.invoke(builder);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get or create nested builder for " + fieldName, e);
+        }
+    }
+
+    private String capitalize(String s) {
+        if (s == null || s.isEmpty()) {
+            return s;
+        }
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    // Example usage:
+    // Assume you have a map like:
+    // Map<String, Object> data = Map.of("originatingWorkflowStep.eventIdentifier.assignedIdentifier", "someIdentifierValue");
+    // Then: WorkflowStep step = new CdmPathPopulator().populate(WorkflowStep.class, data);
+    // Note: Adjust the root class (e.g., BusinessEvent.class if originatingWorkflowStep is there) and handle actual types/packages.
+}
