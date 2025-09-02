@@ -1,0 +1,131 @@
+import com.rosetta.model.lib.RosettaModelObject;
+import com.rosetta.model.lib.RosettaModelObjectBuilder;
+
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * A utility class for populating CDM objects using dot-notated JSON path representations.
+ * Supports array subscription (e.g., eventIdentifier[0].assignedIdentifier) for list fields.
+ * Assumes values are of the correct type for the setter method.
+ */
+public class CdmPathPopulator {
+
+    // Regex to match array subscription, e.g., "eventIdentifier[0]" -> group 1: "eventIdentifier", group 2: "0"
+    private static final Pattern ARRAY_PATTERN = Pattern.compile("(\\w+)\\[(\\d+)\\]");
+
+    /**
+     * Populates a CDM object builder with values from a map where keys are dot-notated paths.
+     *
+     * @param rootClass   The class of the root CDM object.
+     * @param pathToValue A map of paths to values.
+     * @param <T>         The type of the CDM object.
+     * @return The populated CDM object.
+     */
+    public <T extends RosettaModelObject> T populate(Class<T> rootClass, Map<String, Object> pathToValue) {
+        T.Builder builder = getBuilder(rootClass);
+        for (Map.Entry<String, Object> entry : pathToValue.entrySet()) {
+            String path = entry.getKey();
+            Object value = entry.getValue();
+            setByPath(builder, path.split("\\."), 0, value);
+        }
+        return builder.build();
+    }
+
+    private <T extends RosettaModelObject> T.Builder getBuilder(Class<T> rootClass) {
+        try {
+            Method builderMethod = rootClass.getMethod("builder");
+            return (T.Builder) builderMethod.invoke(null);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get builder for " + rootClass.getName(), e);
+        }
+    }
+
+    private void setByPath(RosettaModelObjectBuilder builder, String[] pathSegments, int index, Object value) {
+        if (index == pathSegments.length - 1) {
+            setLeafValue(builder, pathSegments[index], value);
+        } else {
+            RosettaModelObjectBuilder nestedBuilder = getOrCreateNestedBuilder(builder, pathSegments[index]);
+            setByPath(nestedBuilder, pathSegments, index + 1, value);
+        }
+    }
+
+    private void setLeafValue(RosettaModelObjectBuilder builder, String fieldName, Object value) {
+        String setMethodName = "set" + capitalize(fieldName);
+        try {
+            // Find the setter method that matches the value's type
+            Method setMethod = findSetterMethod(builder.getClass(), setMethodName, value.getClass());
+            setMethod.invoke(builder, value);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to set value for " + fieldName, e);
+        }
+    }
+
+    private RosettaModelObjectBuilder getOrCreateNestedBuilder(RosettaModelObjectBuilder builder, String pathSegment) {
+        Matcher arrayMatcher = ARRAY_PATTERN.matcher(pathSegment);
+        if (arrayMatcher.matches()) {
+            // Handle array subscription, e.g., "eventIdentifier[0]"
+            String fieldName = arrayMatcher.group(1); // e.g., "eventIdentifier"
+            int arrayIndex = Integer.parseInt(arrayMatcher.group(2)); // e.g., 0
+            String getOrCreateMethodName = "getOrCreate" + capitalize(fieldName);
+            try {
+                // Assume getOrCreate method for lists accepts an index
+                Method getOrCreateMethod = builder.getClass().getMethod(getOrCreateMethodName, int.class);
+                return (RosettaModelObjectBuilder) getOrCreateMethod.invoke(builder, arrayIndex);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to get or create nested builder for " + pathSegment, e);
+            }
+        } else {
+            // Handle non-array field
+            String getOrCreateMethodName = "getOrCreate" + capitalize(pathSegment);
+            try {
+                Method getOrCreateMethod = builder.getClass().getMethod(getOrCreateMethodName);
+                return (RosettaModelObjectBuilder) getOrCreateMethod.invoke(builder);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to get or create nested builder for " + pathSegment, e);
+            }
+        }
+    }
+
+    private Method findSetterMethod(Class<?> builderClass, String methodName, Class<?> valueType) throws NoSuchMethodException {
+        // Try exact match first
+        try {
+            return builderClass.getMethod(methodName, valueType);
+        } catch (NoSuchMethodException e) {
+            // Fallback: try compatible types (e.g., String for Identifier, etc.)
+            for (Method method : builderClass.getMethods()) {
+                if (method.getName().equals(methodName) && method.getParameterCount() == 1) {
+                    Class<?> paramType = method.getParameterTypes()[0];
+                    if (paramType.isAssignableFrom(valueType)) {
+                        return method;
+                    }
+                }
+            }
+            throw new NoSuchMethodException("No setter found for " + methodName + " with type " + valueType.getName());
+        }
+    }
+
+    private String capitalize(String s) {
+        if (s == null || s.isEmpty()) {
+            return s;
+        }
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    // Example usage:
+    public static void main(String[] args) {
+        // Example map with array subscription
+        Map<String, Object> data = Map.of(
+            "originatingWorkflowStep.eventIdentifier[0].assignedIdentifier", "someIdentifierValue"
+        );
+        
+        CdmPathPopulator populator = new CdmPathPopulator();
+        // Replace WorkflowStep with the appropriate CDM root class, e.g., BusinessEvent
+        // WorkflowStep step = populator.populate(WorkflowStep.class, data);
+        // System.out.println(step);
+    }
+}
