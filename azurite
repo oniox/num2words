@@ -1,0 +1,35 @@
+import com.azure.storage.file.datalake.*;
+
+public class AzuriteNoVolumesTest {
+    
+    private static final String CONNECTION_STRING = 
+        "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;" +
+        "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;" +
+        "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;";
+
+    public static void main(String[] args) {
+        DataLakeServiceClient serviceClient = new DataLakeServiceClientBuilder()
+                .connectionString(CONNECTION_STRING)
+                .buildClient();
+
+        // Create file system and files - this will work even without volumes
+        DataLakeFileSystemClient fileSystem = serviceClient.getFileSystemClient("test-container");
+        fileSystem.createIfNotExists();
+        
+        // Create directories
+        fileSystem.getDirectoryClient("documents").createIfNotExists();
+        fileSystem.getDirectoryClient("images").createIfNotExists();
+        
+        // Create empty files
+        fileSystem.getFileClient("documents/empty.txt").create();
+        fileSystem.getFileClient("images/photo.jpg").create();
+        
+        // List to verify creation
+        System.out.println("Files created successfully without volumes:");
+        fileSystem.listPaths().forEach(path -> {
+            System.out.println(" - " + path.getName() + " (Dir: " + path.isDirectory() + ")");
+        });
+        
+        System.out.println("\nNote: This data will disappear when Azurite container stops!");
+    }
+}
